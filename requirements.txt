@@ -1,9 +1,7 @@
-dependencies = [
-    "google-genai>=1.33.0",
-    "jupyter>=1.1.1",
-    "matplotlib>=3.10.6",
-    "pandas>=2.3.2",
-    "python-dotenv>=1.1.1",
-    "seaborn>=0.13.2",
-    "tqdm>=4.67.1",
-]
+google-genai>=1.33.0
+jupyter>=1.1.1
+matplotlib>=3.10.6
+pandas>=2.3.2
+python-dotenv>=1.1.1
+seaborn>=0.13.2
+tqdm>=4.67.1
