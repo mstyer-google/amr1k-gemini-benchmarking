@@ -24,12 +24,18 @@ from datetime import datetime
 from tqdm import tqdm
 
 locations = ["europe-west4", "us-central1"]
+# 'latest' models are only available on the 'global' endpoint.
+#locations = ["global"]
 gemini_models = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
+    "gemini-2.0-flash-001",
+    "gemini-2.0-flash-lite-001",
     "gemini-2.5-flash-lite",
+    #"gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    #"gemini-flash-latest",
+    "gemini-2.5-pro",
 ]
-thinking_budgets = [0, -1, 1024, 2048]
+thinking_budgets = [0, -1, 512, 1024]
 num_runs = 10  # Number of runs per configuration for statistical significance
 
 results = []
@@ -63,15 +69,15 @@ def save_results():
     # Save results to JSON
     with open('benchmark_results.json', 'w') as f:
         json.dump(results, f, indent=2)
-    
+
     # Also save as CSV for easier analysis
     df = pd.DataFrame(results)
     df.to_csv('benchmark_results.csv', index=False)
     print(f"Saved {len(results)} results to benchmark_results.json and benchmark_results.csv")
 
 def run_benchmark(model, location, thinking_budget, run_num):
-    project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")  
-    
+    project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
+
     client = genai.Client(
         vertexai=True,
         project=project_id,
@@ -80,7 +86,7 @@ def run_benchmark(model, location, thinking_budget, run_num):
 
     # Load the request from the JSON file
     try:
-        with open('gemini-benchmarking/request1.json', 'r') as file:
+        with open('request1.json', 'r') as file:
             request_data = json.load(file)
     except FileNotFoundError:
         # Try alternative path if the first one fails
@@ -91,7 +97,7 @@ def run_benchmark(model, location, thinking_budget, run_num):
     contents = request_data.get('contents', [])
     generation_config = request_data.get('generationConfig', {})
     system_instruction = request_data.get('systemInstruction', {}).get('parts', [])
-    
+
     # Convert the JSON content to the format expected by the API
     api_contents = []
     for content in contents:
@@ -100,12 +106,12 @@ def run_benchmark(model, location, thinking_budget, run_num):
         for part in content.get('parts', []):
             text = part.get('text', '')
             parts.append(types.Part.from_text(text=text))
-        
+
         api_contents.append(types.Content(
             role=role,
             parts=parts
         ))
-    
+
     # Set up the generation config
     generate_content_config = types.GenerateContentConfig(
         temperature=generation_config.get('temperature', 0.8),
@@ -134,12 +140,12 @@ def run_benchmark(model, location, thinking_budget, run_num):
             thinking_budget=thinking_budget,
         ),
     )
-    
+
     # Add system instruction if available
     if system_instruction:
         system_text = system_instruction[0].get('text', '')
         generate_content_config.system_instruction = [types.Part.from_text(text=system_text)]
-    
+
     # Add response schema if available
     response_schema = generation_config.get('responseSchema')
     if response_schema:
@@ -152,7 +158,7 @@ def run_benchmark(model, location, thinking_budget, run_num):
     response_text = ""
 
     print(f"\nRunning benchmark: Model={model}, Location={location}, Thinking Budget={thinking_budget}, Run={run_num}")
-    
+
     try:
         for i, chunk in enumerate(client.models.generate_content_stream(
             model=model,
@@ -161,20 +167,21 @@ def run_benchmark(model, location, thinking_budget, run_num):
         )):
             if i == 0:
                 first_token_time = time.time() - start_time
-            
+
             response_text += chunk.text
             last_token_time = time.time() - start_time
-            
+
             # Progress indicator (optional)
             if i % 10 == 0:
                 print(".", end="", flush=True)
-    
+
     except Exception as e:
         print(f"\nError during generation: {e}")
         return None
-    
-    print(f"\nCompleted in {last_token_time:.2f}s")
-    
+
+    if last_token_time is not None:
+        print(f"\nCompleted in {last_token_time:.2f}s")
+
     return {
         "model": model,
         "location": location,
@@ -200,17 +207,17 @@ def calculate_statistics(df, metric):
 
 def run_benchmarks():
     load_existing_results()  # Load existing results first
-    
+
     # Create a set of already completed configurations
     completed_configs = set()
     for result in results:
         config_key = (result['model'], result['location'], result['thinking_budget'], result['run'])
         completed_configs.add(config_key)
-    
+
     total_combinations = len(gemini_models) * len(locations) * len(thinking_budgets) * num_runs
     remaining_combinations = total_combinations - len(completed_configs)
     print(f"Starting benchmarks with {remaining_combinations} remaining runs out of {total_combinations} total combinations")
-    
+
     for model in gemini_models:
         for location in locations:
             for thinking_budget in thinking_budgets:
@@ -218,96 +225,96 @@ def run_benchmarks():
                 if model == "gemini-2.5-pro" and thinking_budget == 0:
                     print(f"Skipping unsupported combination: {model} with thinking_budget={thinking_budget}")
                     continue
-                    
+
                 for run in range(1, num_runs + 1):
                     # Skip if this configuration was already run
                     config_key = (model, location, thinking_budget, run)
                     if config_key in completed_configs:
                         print(f"Skipping already completed benchmark: Model={model}, Location={location}, Thinking Budget={thinking_budget}, Run={run}")
                         continue
-                    
+
                     result = run_benchmark(model, location, thinking_budget, run)
                     if result:
                         results.append(result)
                         completed_configs.add(config_key)
-                    
+
                     # Save results after each run
                     save_results()
-                    
+
                     # Wait 1 seconds between runs to avoid rate limiting
                     print(f"Waiting 1 seconds before next run...")
-                    time.sleep(5)
+                    time.sleep(0.5)
 
 def generate_report():
     if not results:
         print("No results to report")
         return
-        
+
     df = pd.DataFrame(results)
-    
+
     # Overall statistics
     print("\n===== OVERALL STATISTICS =====")
     ttft_stats = calculate_statistics(df, "ttft")
     tlt_stats = calculate_statistics(df, "tlt")
-    
+
     print("\nTime to First Token (TTFT) Statistics:")
     for stat, value in ttft_stats.items():
         print(f"{stat}: {value:.4f}s")
-    
+
     print("\nTime to Last Token (TLT) Statistics:")
     for stat, value in tlt_stats.items():
         print(f"{stat}: {value:.4f}s")
-    
+
     # Statistics by model
     print("\n===== STATISTICS BY MODEL =====")
     for model in gemini_models:
         model_df = df[df['model'] == model]
         if len(model_df) == 0:
             continue
-            
+
         print(f"\nModel: {model}")
-        
+
         ttft_stats = calculate_statistics(model_df, "ttft")
         tlt_stats = calculate_statistics(model_df, "tlt")
-        
+
         print("\nTTFT:")
         for stat, value in ttft_stats.items():
             print(f"{stat}: {value:.4f}s")
-        
+
         print("\nTLT:")
         for stat, value in tlt_stats.items():
             print(f"{stat}: {value:.4f}s")
-    
+
     # Statistics by thinking budget
     print("\n===== STATISTICS BY THINKING BUDGET =====")
     for budget in thinking_budgets:
         budget_df = df[df['thinking_budget'] == budget]
         if len(budget_df) == 0:
             continue
-            
+
         print(f"\nThinking Budget: {budget}")
-        
+
         ttft_stats = calculate_statistics(budget_df, "ttft")
         tlt_stats = calculate_statistics(budget_df, "tlt")
-        
+
         print("\nTTFT:")
         for stat, value in ttft_stats.items():
             print(f"{stat}: {value:.4f}s")
-        
+
         print("\nTLT:")
         for stat, value in tlt_stats.items():
             print(f"{stat}: {value:.4f}s")
-    
+
     # Generate detailed report as HTML
     html_report = df.groupby(['model', 'thinking_budget']).agg({
         'ttft': ['mean', 'median', 'std', lambda x: np.percentile(x, 95)],
         'tlt': ['mean', 'median', 'std', lambda x: np.percentile(x, 95)]
     }).reset_index()
-    
-    html_report.columns = ['model', 'thinking_budget', 
+
+    html_report.columns = ['model', 'thinking_budget',
                           'ttft_mean', 'ttft_median', 'ttft_std', 'ttft_p95',
                           'tlt_mean', 'tlt_median', 'tlt_std', 'tlt_p95']
-    
+
     html_report.to_html('benchmark_report.html')
     print("\nDetailed report saved to benchmark_report.html")
 
